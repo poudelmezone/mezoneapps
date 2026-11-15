@@ -1,0 +1,2 @@
+Uploaded APKs live in storage/apks, images in storage/media, and the SQLite
+database in storage/app.db. None of it is served directly by the web server.
