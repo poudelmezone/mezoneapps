@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+        env:
+          # The app only needs these at build time for canonical URLs;
+          # no secrets are required to compile it.
+          NEXT_TELEMETRY_DISABLED: 1
+
+      - name: Smoke test the server
+        run: |
+          npm start &
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:3000/api/apps > /dev/null; then
+              echo "server is up"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "server did not start in time" >&2
+          exit 1

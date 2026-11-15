@@ -1,0 +1,11 @@
+node_modules
+.next
+.git
+.github
+storage
+.env
+.env.*
+!.env.example
+*.tsbuildinfo
+README.md
+LICENSE
