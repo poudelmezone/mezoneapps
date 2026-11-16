@@ -110,22 +110,33 @@ async function getSqlite(): Promise<SqliteDb> {
     return sqlite;
   }
 
-  for (const dir of [DATA_DIR, APK_DIR, MEDIA_DIR]) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
-
   const file = path.resolve(process.env.DATABASE_PATH || path.join(DATA_DIR, 'app.db'));
-  fs.mkdirSync(path.dirname(file), { recursive: true });
 
-  const { default: Database } = (await import('better-sqlite3')) as unknown as {
-    default: new (file: string) => SqliteDb;
-  };
+  let db: SqliteDb;
+  try {
+    for (const dir of [DATA_DIR, APK_DIR, MEDIA_DIR]) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    fs.mkdirSync(path.dirname(file), { recursive: true });
 
-  const db = new Database(file);
-  db.pragma('journal_mode = WAL');
-  db.pragma('foreign_keys = ON');
-  db.pragma('busy_timeout = 5000');
-  db.exec(fs.readFileSync(path.join(process.cwd(), 'db', 'schema.sql'), 'utf8'));
+    const { default: Database } = (await import('better-sqlite3')) as unknown as {
+      default: new (file: string) => SqliteDb;
+    };
+
+    db = new Database(file);
+    db.pragma('journal_mode = WAL');
+    db.pragma('foreign_keys = ON');
+    db.pragma('busy_timeout = 5000');
+    db.exec(fs.readFileSync(path.join(process.cwd(), 'db', 'schema.sql'), 'utf8'));
+  } catch (error) {
+    // Serverless filesystems are read-only, so this is the most common
+    // deployment mistake. Say what to do instead of a bare EROFS.
+    throw new Error(
+      `Cannot open the SQLite database at ${file}: ${(error as Error).message}. ` +
+        'This host has no writable disk (Vercel, Netlify, AWS Lambda). ' +
+        'Set POSTGRES_URL (or DATABASE_URL) to a Postgres connection string, then redeploy.',
+    );
+  }
 
   sqlite = db;
   holder.__mezoneappsDb = db;
