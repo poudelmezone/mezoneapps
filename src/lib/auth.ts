@@ -64,7 +64,13 @@ export function ensureBootstrapAdmin(): Promise<void> {
       const count = await one<{ n: number }>('SELECT COUNT(*) AS n FROM users');
       if (Number(count?.n ?? 0) > 0) return;
 
-      await createUser(username, password);
+      try {
+        await createUser(username, password);
+      } catch (error) {
+        // Another instance created it first (serverless cold starts race).
+        const again = await one<{ n: number }>('SELECT COUNT(*) AS n FROM users');
+        if (Number(again?.n ?? 0) === 0) throw error;
+      }
     })().catch((error) => {
       console.error('[auth] bootstrap failed', error);
     });

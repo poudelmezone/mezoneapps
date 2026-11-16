@@ -61,9 +61,23 @@ async function getPool(): Promise<PgPool> {
 async function ensurePostgres(): Promise<PgPool> {
   const pool = await getPool();
   if (!pgReady) {
-    pgReady = pool.query(POSTGRES_SCHEMA).then(() => undefined);
+    pgReady = pool
+      .query(POSTGRES_SCHEMA)
+      .then(() => undefined)
+      .catch(async (error) => {
+        // Two cold instances can migrate at the same moment and one loses the
+        // race on a system catalogue row. The schema is idempotent; retry once.
+        pgReady = null;
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        await (await getPool()).query(POSTGRES_SCHEMA);
+      });
   }
-  await pgReady;
+  try {
+    await pgReady;
+  } catch (error) {
+    pgReady = null;
+    throw error;
+  }
   return pool;
 }
 
