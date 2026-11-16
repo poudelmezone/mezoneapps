@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { formatBytes, formatCount } from '@/lib/format';
+import HeroScene from './HeroScene';
 import { IconArrowRight, IconDownload } from './icons';
 
 type HeroApp = {
@@ -45,6 +46,10 @@ export default function Hero({ appCount, downloads, releases, preview }: HeroPro
         </div>
 
         <div className="hero-side">
+          <div className="hero-stage" aria-hidden="true">
+            <HeroScene />
+          </div>
+
           <div className="ledger">
             <div className="ledger-head">
               <span>Latest releases</span>
