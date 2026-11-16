@@ -1,18 +1,19 @@
 import { randomUUID } from 'node:crypto';
-import { db, now } from './db';
-import { deleteMedia, removeFile, resolveStoredApk } from './uploads';
+import { all, now, one, run, runMany } from './db';
+import { deleteStored } from './storage';
 import type { AppDetail, AppRow, AppSummary, ReleaseRow, ScreenshotRow } from './types';
 
 type ReleaseLite = AppSummary['latest'];
 
-function attachReleases(apps: AppRow[]): AppSummary[] {
+async function attachReleases(apps: AppRow[]): Promise<AppSummary[]> {
   if (apps.length === 0) return [];
 
   const ids = apps.map((app) => app.id);
   const placeholders = ids.map(() => '?').join(',');
-  const releases = db
-    .prepare(`SELECT * FROM releases WHERE app_id IN (${placeholders}) ORDER BY created_at DESC`)
-    .all(...ids) as ReleaseRow[];
+  const releases = await all<ReleaseRow>(
+    `SELECT * FROM releases WHERE app_id IN (${placeholders}) ORDER BY created_at DESC`,
+    ids,
+  );
 
   const byApp = new Map<string, ReleaseRow[]>();
   for (const release of releases) {
@@ -37,45 +38,41 @@ function attachReleases(apps: AppRow[]): AppSummary[] {
   });
 }
 
-export function listPublishedApps(): AppSummary[] {
-  const apps = db
-    .prepare(`SELECT * FROM apps WHERE published = 1 ORDER BY featured DESC, COALESCE(released_at, created_at) DESC`)
-    .all() as AppRow[];
+export async function listPublishedApps(): Promise<AppSummary[]> {
+  const apps = await all<AppRow>(
+    `SELECT * FROM apps WHERE published = 1 ORDER BY featured DESC, COALESCE(released_at, created_at) DESC`,
+  );
   return attachReleases(apps);
 }
 
-export function listAllApps(): AppSummary[] {
-  const apps = db.prepare('SELECT * FROM apps ORDER BY created_at DESC').all() as AppRow[];
+export async function listAllApps(): Promise<AppSummary[]> {
+  const apps = await all<AppRow>('SELECT * FROM apps ORDER BY created_at DESC');
   return attachReleases(apps);
 }
 
-export function listCategories(): string[] {
-  const rows = db
-    .prepare(`SELECT DISTINCT category FROM apps WHERE published = 1 ORDER BY category COLLATE NOCASE ASC`)
-    .all() as { category: string }[];
+export async function listCategories(): Promise<string[]> {
+  const rows = await all<{ category: string }>(
+    `SELECT DISTINCT category FROM apps WHERE published = 1 ORDER BY category ASC`,
+  );
   return rows.map((row) => row.category);
 }
 
-export function getAppBySlug(slug: string): AppDetail | null {
-  const app = db.prepare('SELECT * FROM apps WHERE slug = ? AND published = 1').get(slug) as AppRow | undefined;
+export async function getAppBySlug(slug: string): Promise<AppDetail | null> {
+  const app = await one<AppRow>('SELECT * FROM apps WHERE slug = ? AND published = 1', [slug]);
   if (!app) return null;
   return buildDetail(app);
 }
 
-export function getAppById(id: string): AppDetail | null {
-  const app = db.prepare('SELECT * FROM apps WHERE id = ?').get(id) as AppRow | undefined;
+export async function getAppById(id: string): Promise<AppDetail | null> {
+  const app = await one<AppRow>('SELECT * FROM apps WHERE id = ?', [id]);
   if (!app) return null;
   return buildDetail(app);
 }
 
-function buildDetail(app: AppRow): AppDetail {
-  const summary = attachReleases([app])[0]!;
-  const releases = db
-    .prepare('SELECT * FROM releases WHERE app_id = ? ORDER BY created_at DESC')
-    .all(app.id) as ReleaseRow[];
-  const shots = db
-    .prepare('SELECT * FROM screenshots WHERE app_id = ? ORDER BY position ASC')
-    .all(app.id) as ScreenshotRow[];
+async function buildDetail(app: AppRow): Promise<AppDetail> {
+  const summary = (await attachReleases([app]))[0]!;
+  const releases = await all<ReleaseRow>('SELECT * FROM releases WHERE app_id = ? ORDER BY created_at DESC', [app.id]);
+  const shots = await all<ScreenshotRow>('SELECT * FROM screenshots WHERE app_id = ? ORDER BY position ASC', [app.id]);
 
   return {
     ...summary,
@@ -97,77 +94,79 @@ export type AppInput = {
   iconMediaId: string | null;
 };
 
-export function slugTaken(slug: string, exceptId?: string): boolean {
+export async function slugTaken(slug: string, exceptId?: string): Promise<boolean> {
   const row = exceptId
-    ? db.prepare('SELECT id FROM apps WHERE slug = ? AND id != ?').get(slug, exceptId)
-    : db.prepare('SELECT id FROM apps WHERE slug = ?').get(slug);
+    ? await one('SELECT id FROM apps WHERE slug = ? AND id != ?', [slug, exceptId])
+    : await one('SELECT id FROM apps WHERE slug = ?', [slug]);
   return Boolean(row);
 }
 
-export function createApp(input: AppInput): string {
+export async function createApp(input: AppInput): Promise<string> {
   const id = randomUUID();
   const timestamp = now();
-  db.prepare(
+  await run(
     `INSERT INTO apps
        (id, slug, name, short_description, description, category, changelog, icon_media_id,
         featured, published, downloads, released_at, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)`,
-  ).run(
-    id,
-    input.slug,
-    input.name,
-    input.shortDescription,
-    input.description,
-    input.category,
-    input.changelog,
-    input.iconMediaId,
-    input.featured ? 1 : 0,
-    input.published ? 1 : 0,
-    input.releasedAt,
-    timestamp,
-    timestamp,
+    [
+      id,
+      input.slug,
+      input.name,
+      input.shortDescription,
+      input.description,
+      input.category,
+      input.changelog,
+      input.iconMediaId,
+      input.featured ? 1 : 0,
+      input.published ? 1 : 0,
+      input.releasedAt,
+      timestamp,
+      timestamp,
+    ],
   );
   return id;
 }
 
-export function updateApp(id: string, input: AppInput): void {
-  db.prepare(
+export async function updateApp(id: string, input: AppInput): Promise<void> {
+  await run(
     `UPDATE apps SET
        slug = ?, name = ?, short_description = ?, description = ?, category = ?, changelog = ?,
        icon_media_id = ?, featured = ?, published = ?, released_at = ?, updated_at = ?
      WHERE id = ?`,
-  ).run(
-    input.slug,
-    input.name,
-    input.shortDescription,
-    input.description,
-    input.category,
-    input.changelog,
-    input.iconMediaId,
-    input.featured ? 1 : 0,
-    input.published ? 1 : 0,
-    input.releasedAt,
-    now(),
-    id,
+    [
+      input.slug,
+      input.name,
+      input.shortDescription,
+      input.description,
+      input.category,
+      input.changelog,
+      input.iconMediaId,
+      input.featured ? 1 : 0,
+      input.published ? 1 : 0,
+      input.releasedAt,
+      now(),
+      id,
+    ],
   );
 }
 
-export function deleteApp(id: string): void {
-  const app = getAppById(id);
+export async function deleteApp(id: string): Promise<void> {
+  const app = await getAppById(id);
   if (!app) return;
 
   for (const release of app.releases) {
-    removeFile(resolveStoredApk(release.stored_name));
+    await deleteStored('apk', release.stored_name);
   }
   for (const shot of app.screenshots) {
-    deleteMedia(shot.mediaId);
+    await deleteMedia(shot.mediaId);
   }
-  deleteMedia(app.icon_media_id);
+  await deleteMedia(app.icon_media_id);
 
-  db.prepare('DELETE FROM apps WHERE id = ?').run(id);
+  await run('DELETE FROM apps WHERE id = ?', [id]);
 }
 
-export function addRelease(input: {
+export async function addRelease(input: {
   appId: string;
   version: string;
   changelog: string;
@@ -175,72 +174,74 @@ export function addRelease(input: {
   storedName: string;
   fileSize: number;
   sha256: string;
-}): string {
+}): Promise<string> {
   const id = randomUUID();
-  db.prepare(
+  await run(
     `INSERT INTO releases (id, app_id, version, changelog, file_name, stored_name, file_size, sha256, created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(
-    id,
-    input.appId,
-    input.version,
-    input.changelog,
-    input.fileName,
-    input.storedName,
-    input.fileSize,
-    input.sha256,
-    now(),
+    [id, input.appId, input.version, input.changelog, input.fileName, input.storedName, input.fileSize, input.sha256, now()],
   );
-  db.prepare('UPDATE apps SET updated_at = ? WHERE id = ?').run(now(), input.appId);
+  await run('UPDATE apps SET updated_at = ? WHERE id = ?', [now(), input.appId]);
   return id;
 }
 
-export function deleteRelease(id: string): void {
-  const row = db.prepare('SELECT * FROM releases WHERE id = ?').get(id) as ReleaseRow | undefined;
+export async function deleteRelease(id: string): Promise<void> {
+  const row = await one<ReleaseRow>('SELECT * FROM releases WHERE id = ?', [id]);
   if (!row) return;
-  removeFile(resolveStoredApk(row.stored_name));
-  db.prepare('DELETE FROM releases WHERE id = ?').run(id);
+  await deleteStored('apk', row.stored_name);
+  await run('DELETE FROM releases WHERE id = ?', [id]);
 }
 
-export function getRelease(id: string): ReleaseRow | undefined {
-  return db.prepare('SELECT * FROM releases WHERE id = ?').get(id) as ReleaseRow | undefined;
+export async function getRelease(id: string): Promise<ReleaseRow | undefined> {
+  return one<ReleaseRow>('SELECT * FROM releases WHERE id = ?', [id]);
 }
 
-export function addScreenshot(appId: string, mediaId: string): void {
-  const count = db.prepare('SELECT COUNT(*) AS n FROM screenshots WHERE app_id = ?').get(appId) as { n: number };
-  db.prepare('INSERT INTO screenshots (id, app_id, media_id, position) VALUES (?, ?, ?, ?)').run(
+export async function addScreenshot(appId: string, mediaId: string): Promise<void> {
+  const count = await one<{ n: number }>('SELECT COUNT(*) AS n FROM screenshots WHERE app_id = ?', [appId]);
+  await run('INSERT INTO screenshots (id, app_id, media_id, position) VALUES (?, ?, ?, ?)', [
     randomUUID(),
     appId,
     mediaId,
-    count.n,
-  );
+    Number(count?.n ?? 0),
+  ]);
 }
 
-export function deleteScreenshot(id: string): void {
-  const row = db.prepare('SELECT * FROM screenshots WHERE id = ?').get(id) as ScreenshotRow | undefined;
+export async function deleteScreenshot(id: string): Promise<void> {
+  const row = await one<ScreenshotRow>('SELECT * FROM screenshots WHERE id = ?', [id]);
   if (!row) return;
-  deleteMedia(row.media_id);
-  db.prepare('DELETE FROM screenshots WHERE id = ?').run(id);
+  await deleteMedia(row.media_id);
+  await run('DELETE FROM screenshots WHERE id = ?', [id]);
+}
+
+export async function deleteMedia(id: string | null | undefined): Promise<void> {
+  if (!id) return;
+  const media = await one<{ stored_name: string }>('SELECT stored_name FROM media WHERE id = ?', [id]);
+  if (media) await deleteStored('media', media.stored_name);
+  await run('DELETE FROM media WHERE id = ?', [id]);
 }
 
 /** Atomically record a download and return the release to stream. */
-export function registerDownload(releaseId: string): ReleaseRow | undefined {
-  const row = getRelease(releaseId);
+export async function registerDownload(releaseId: string): Promise<ReleaseRow | undefined> {
+  const row = await getRelease(releaseId);
   if (!row) return undefined;
 
-  const tx = db.transaction(() => {
-    db.prepare('UPDATE releases SET downloads = downloads + 1 WHERE id = ?').run(releaseId);
-    db.prepare('UPDATE apps SET downloads = downloads + 1 WHERE id = ?').run(row.app_id);
-  });
-  tx();
+  await runMany([
+    { sql: 'UPDATE releases SET downloads = downloads + 1 WHERE id = ?', params: [releaseId] },
+    { sql: 'UPDATE apps SET downloads = downloads + 1 WHERE id = ?', params: [row.app_id] },
+  ]);
 
   return row;
 }
 
-export function platformStats() {
-  const apps = db.prepare('SELECT COUNT(*) AS n FROM apps WHERE published = 1').get() as { n: number };
-  const downloads = db.prepare('SELECT COALESCE(SUM(downloads), 0) AS n FROM apps').get() as { n: number };
-  const releases = db.prepare('SELECT COUNT(*) AS n FROM releases').get() as { n: number };
-  const size = db.prepare('SELECT COALESCE(SUM(file_size), 0) AS n FROM releases').get() as { n: number };
-  return { apps: apps.n, downloads: downloads.n, releases: releases.n, bytes: size.n };
+export async function platformStats() {
+  const apps = await one<{ n: number }>('SELECT COUNT(*) AS n FROM apps WHERE published = 1');
+  const downloads = await one<{ n: number }>('SELECT COALESCE(SUM(downloads), 0) AS n FROM apps');
+  const releases = await one<{ n: number }>('SELECT COUNT(*) AS n FROM releases');
+  const size = await one<{ n: number }>('SELECT COALESCE(SUM(file_size), 0) AS n FROM releases');
+  return {
+    apps: Number(apps?.n ?? 0),
+    downloads: Number(downloads?.n ?? 0),
+    releases: Number(releases?.n ?? 0),
+    bytes: Number(size?.n ?? 0),
+  };
 }

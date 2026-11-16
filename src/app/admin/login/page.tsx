@@ -18,7 +18,7 @@ export default async function LoginPage() {
           <span className="brand-mark" aria-hidden="true">
             A
           </span>
-          <span className="brand-text">APKForge</span>
+          <span className="brand-text">MezoneApps</span>
         </Link>
 
         <h1>Admin sign in</h1>

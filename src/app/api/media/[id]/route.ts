@@ -1,7 +1,8 @@
 import fs from 'node:fs';
 import { Readable } from 'node:stream';
 import { fail } from '@/lib/http';
-import { getMedia, mediaPath } from '@/lib/uploads';
+import { resolveStored } from '@/lib/storage';
+import { getMedia } from '@/lib/uploads';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -12,19 +13,25 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
   const { id } = await params;
   if (!UUID.test(id)) return fail('Not found', 404);
 
-  const media = getMedia(id);
+  const media = await getMedia(id);
   if (!media) return fail('Not found', 404);
 
-  const filePath = mediaPath(media);
-  if (!fs.existsSync(filePath)) return fail('Not found', 404);
+  const target = resolveStored('media', media.stored_name);
+  if (!target) return fail('Not found', 404);
 
-  const stream = Readable.toWeb(fs.createReadStream(filePath)) as unknown as ReadableStream;
+  if (target.type === 'remote') {
+    return new Response(null, {
+      status: 302,
+      headers: { Location: target.url, 'Cache-Control': 'public, max-age=86400' },
+    });
+  }
+
+  const stream = Readable.toWeb(fs.createReadStream(target.path)) as unknown as ReadableStream;
 
   return new Response(stream, {
     headers: {
       'Content-Type': media.mime,
       'Content-Length': String(media.size),
-      // Uploads are immutable: content addressed by id, never overwritten.
       'Cache-Control': 'public, max-age=31536000, immutable',
       'X-Content-Type-Options': 'nosniff',
       'Content-Security-Policy': "default-src 'none'; sandbox",

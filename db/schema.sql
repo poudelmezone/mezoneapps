@@ -1,5 +1,5 @@
 -- ===========================================================================
--- APKForge schema (SQLite dialect).
+-- MezoneApps schema (SQLite dialect).
 -- Applied idempotently on boot by src/lib/db.ts.
 -- All timestamps are Unix epoch milliseconds (INTEGER).
 -- ===========================================================================

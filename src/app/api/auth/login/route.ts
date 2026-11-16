@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import {
   createSession,
+  ensureBootstrapAdmin,
   findUserByUsername,
   verifyOrigin,
   verifyPassword,
@@ -19,7 +20,8 @@ export async function POST(req: Request) {
   try {
     if (!verifyOrigin(req)) return fail('Cross-origin request blocked.', 403);
 
-    pruneRateLimits();
+    await ensureBootstrapAdmin();
+    await pruneRateLimits();
 
     const body = (await req.json().catch(() => null)) as { username?: string; password?: string } | null;
     const username = asString(body?.username ?? null).trim().toLowerCase();
@@ -29,7 +31,7 @@ export async function POST(req: Request) {
 
     const ip = clientIp(req);
     const key = `login:${ip}:${username}`;
-    const limit = rateLimit(key, MAX_ATTEMPTS, WINDOW_MS);
+    const limit = await rateLimit(key, MAX_ATTEMPTS, WINDOW_MS);
 
     if (!limit.ok) {
       return NextResponse.json(
@@ -38,7 +40,7 @@ export async function POST(req: Request) {
       );
     }
 
-    const user = findUserByUsername(username);
+    const user = await findUserByUsername(username);
 
     // Constant-ish work whether or not the user exists (bcrypt on a dummy hash).
     const valid = user
@@ -50,7 +52,7 @@ export async function POST(req: Request) {
       return fail('Invalid username or password.', 401);
     }
 
-    resetRateLimit(key);
+    await resetRateLimit(key);
 
     const session = await createSession(user.id, req.headers.get('user-agent'));
     return NextResponse.json({ ok: true, csrfToken: session.csrfToken, username: session.username });

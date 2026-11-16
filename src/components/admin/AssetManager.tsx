@@ -3,6 +3,7 @@
 import { useRouter } from 'next/navigation';
 import { useRef, useState } from 'react';
 import { IconTrash } from '@/components/icons';
+import { uploadFile } from '@/lib/client-upload';
 import { formatBytes, formatCount, formatDate } from '@/lib/format';
 import type { ReleaseRow } from '@/lib/types';
 
@@ -12,19 +13,22 @@ type Props = {
   releases: ReleaseRow[];
   screenshots: { id: string; mediaId: string }[];
   maxApkMb: number;
+  uploadMode: 'server' | 'blob';
 };
 
-export default function AssetManager({ appId, csrf, releases, screenshots, maxApkMb }: Props) {
+export default function AssetManager({ appId, csrf, releases, screenshots, maxApkMb, uploadMode }: Props) {
   const router = useRouter();
   const releaseForm = useRef<HTMLFormElement>(null);
   const shotForm = useRef<HTMLFormElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState<string | null>(null);
 
-  async function request(url: string, method: string, body?: FormData) {
+  async function request(url: string, method: string, body?: BodyInit, json = false) {
     const response = await fetch(url, {
       method,
-      headers: { 'x-csrf-token': csrf },
+      headers: json
+        ? { 'x-csrf-token': csrf, 'Content-Type': 'application/json' }
+        : { 'x-csrf-token': csrf },
       body,
     }).catch(() => null);
 
@@ -41,12 +45,40 @@ export default function AssetManager({ appId, csrf, releases, screenshots, maxAp
     setError(null);
     setPending('release');
 
-    const ok = await request(`/api/admin/apps/${appId}/releases`, 'POST', new FormData(event.currentTarget));
+    const form = new FormData(event.currentTarget);
 
-    setPending(null);
-    if (ok) {
-      releaseForm.current?.reset();
-      router.refresh();
+    try {
+      let ok: boolean;
+
+      if (uploadMode === 'blob') {
+        const file = form.get('apk');
+        if (!(file instanceof File) || file.size === 0) {
+          setError('Choose an .apk file to upload.');
+          setPending(null);
+          return;
+        }
+        const apk = await uploadFile(file, 'apk');
+        ok = await request(
+          `/api/admin/apps/${appId}/releases`,
+          'POST',
+          JSON.stringify({
+            fields: { version: String(form.get('version') ?? ''), changelog: String(form.get('changelog') ?? '') },
+            apk,
+          }),
+          true,
+        );
+      } else {
+        ok = await request(`/api/admin/apps/${appId}/releases`, 'POST', form);
+      }
+
+      if (ok) {
+        releaseForm.current?.reset();
+        router.refresh();
+      }
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Upload failed.');
+    } finally {
+      setPending(null);
     }
   }
 
@@ -55,17 +87,37 @@ export default function AssetManager({ appId, csrf, releases, screenshots, maxAp
     setError(null);
     setPending('screenshot');
 
-    const ok = await request(`/api/admin/apps/${appId}/screenshots`, 'POST', new FormData(event.currentTarget));
+    const form = new FormData(event.currentTarget);
 
-    setPending(null);
-    if (ok) {
-      shotForm.current?.reset();
-      router.refresh();
+    try {
+      let ok: boolean;
+
+      if (uploadMode === 'blob') {
+        const file = form.get('screenshot');
+        if (!(file instanceof File) || file.size === 0) {
+          setError('Choose an image to upload.');
+          setPending(null);
+          return;
+        }
+        const image = await uploadFile(file, 'image');
+        ok = await request(`/api/admin/apps/${appId}/screenshots`, 'POST', JSON.stringify({ screenshots: [image] }), true);
+      } else {
+        ok = await request(`/api/admin/apps/${appId}/screenshots`, 'POST', form);
+      }
+
+      if (ok) {
+        shotForm.current?.reset();
+        router.refresh();
+      }
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Upload failed.');
+    } finally {
+      setPending(null);
     }
   }
 
   async function removeRelease(id: string) {
-    if (!window.confirm('Delete this build? The APK file is removed from disk.')) return;
+    if (!window.confirm('Delete this build? The APK file is removed from storage.')) return;
     setPending(id);
     setError(null);
     if (await request(`/api/admin/releases/${id}`, 'DELETE')) router.refresh();
@@ -198,14 +250,7 @@ export default function AssetManager({ appId, csrf, releases, screenshots, maxAp
           <div className="form-grid">
             <div className="field">
               <label htmlFor="screenshot-file">Add a screenshot</label>
-              <input
-                id="screenshot-file"
-                name="screenshot"
-                type="file"
-                accept="image/png,image/jpeg,image/webp"
-                className="input"
-                required
-              />
+              <input id="screenshot-file" name="screenshot" type="file" accept="image/png,image/jpeg,image/webp" className="input" required />
             </div>
           </div>
 

@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { IconMoon, IconSun } from './icons';
 
-const STORAGE_KEY = 'apkforge-theme';
+const STORAGE_KEY = 'mezoneapps-theme';
 type Theme = 'light' | 'dark';
 
 function applyTheme(next: Theme) {

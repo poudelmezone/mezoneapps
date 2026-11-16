@@ -10,7 +10,7 @@ export default function SiteFooter() {
               <span className="brand-mark" aria-hidden="true">
                 A
               </span>
-              <span className="brand-text">APKForge</span>
+              <span className="brand-text">MezoneApps</span>
             </Link>
             <p>Signed builds, published by the developer. No trackers, no redirects, no third-party mirrors.</p>
           </div>
@@ -23,7 +23,7 @@ export default function SiteFooter() {
         </div>
 
         <div className="footer-bottom">
-          <span>© {new Date().getFullYear()} APKForge</span>
+          <span>© {new Date().getFullYear()} MezoneApps</span>
           <span>APKs are served with their SHA-256 checksum for verification.</span>
         </div>
       </div>

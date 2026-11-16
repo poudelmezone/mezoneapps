@@ -23,9 +23,9 @@ const STEPS = [
 ];
 
 export default async function HomePage() {
-  const apps = listPublishedApps();
-  const categories = listCategories();
-  const stats = platformStats();
+  const apps = await listPublishedApps();
+  const categories = await listCategories();
+  const stats = await platformStats();
   const preview = apps.slice(0, 3).map((app) => ({
     slug: app.slug,
     name: app.name,

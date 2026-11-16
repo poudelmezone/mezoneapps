@@ -9,7 +9,7 @@ export async function GET(req: Request) {
   const search = (url.searchParams.get('q') ?? '').toLowerCase();
   const category = url.searchParams.get('category');
 
-  let apps = listPublishedApps();
+  let apps = await listPublishedApps();
 
   if (search) {
     apps = apps.filter(

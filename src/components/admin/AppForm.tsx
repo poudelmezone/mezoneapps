@@ -2,22 +2,26 @@
 
 import { useRouter } from 'next/navigation';
 import { useRef, useState } from 'react';
-import type { AppDetail } from '@/lib/types';
+import { uploadFile } from '@/lib/client-upload';
 import { CATEGORIES } from '@/lib/categories';
+import type { AppDetail } from '@/lib/types';
 
 type Props = {
   csrf: string;
   mode: 'create' | 'edit';
   app?: AppDetail;
   maxApkMb: number;
+  /** `blob` when the deployment has no writable disk (Vercel). */
+  uploadMode: 'server' | 'blob';
 };
 
-export default function AppForm({ csrf, mode, app, maxApkMb }: Props) {
+export default function AppForm({ csrf, mode, app, maxApkMb, uploadMode }: Props) {
   const router = useRouter();
   const formRef = useRef<HTMLFormElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  const [stage, setStage] = useState<string | null>(null);
 
   const released = app?.released_at ? new Date(app.released_at).toISOString().slice(0, 10) : '';
 
@@ -32,17 +36,49 @@ export default function AppForm({ csrf, mode, app, maxApkMb }: Props) {
     const method = mode === 'create' ? 'POST' : 'PATCH';
 
     try {
-      const response = await fetch(url, {
-        method,
-        headers: { 'x-csrf-token': csrf },
-        body: form,
-      });
+      const headers: Record<string, string> = { 'x-csrf-token': csrf };
+      let body: BodyInit;
 
-      const data = (await response.json().catch(() => ({}))) as { error?: string; id?: string; slug?: string };
+      if (uploadMode === 'blob') {
+        const fields: Record<string, string | boolean> = {};
+        for (const [key, value] of form.entries()) {
+          if (typeof value === 'string') fields[key] = value;
+        }
+        fields.published = form.has('published');
+        fields.featured = form.has('featured');
+
+        const iconFile = form.get('icon');
+        const apkFile = form.get('apk');
+        const shotFiles = form
+          .getAll('screenshots')
+          .filter((entry): entry is File => entry instanceof File && entry.size > 0);
+
+        setStage('Uploading icon…');
+        const icon = iconFile instanceof File && iconFile.size > 0 ? await uploadFile(iconFile, 'image') : null;
+
+        const screenshots = [];
+        for (const file of shotFiles) {
+          setStage(`Uploading ${file.name}…`);
+          screenshots.push(await uploadFile(file, 'image'));
+        }
+
+        setStage('Uploading APK…');
+        const apk = apkFile instanceof File && apkFile.size > 0 ? await uploadFile(apkFile, 'apk') : null;
+
+        setStage('Saving…');
+        body = JSON.stringify({ fields, icon, screenshots, apk });
+        headers['Content-Type'] = 'application/json';
+      } else {
+        body = form;
+      }
+
+      const response = await fetch(url, { method, headers, body });
+      const data = (await response.json().catch(() => ({}))) as { error?: string; id?: string };
 
       if (!response.ok) {
         setError(data.error ?? 'The app could not be saved.');
         setPending(false);
+        setStage(null);
         return;
       }
 
@@ -53,11 +89,13 @@ export default function AppForm({ csrf, mode, app, maxApkMb }: Props) {
       }
 
       setPending(false);
+      setStage(null);
       setSuccess('Saved. Public pages now show the new details.');
       router.refresh();
-    } catch {
-      setError('Network error while saving.');
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Upload failed. Check the file type and size.');
       setPending(false);
+      setStage(null);
     }
   }
 
@@ -81,15 +119,7 @@ export default function AppForm({ csrf, mode, app, maxApkMb }: Props) {
         <div className="form-grid">
           <div className="field">
             <label htmlFor="name">App name *</label>
-            <input
-              id="name"
-              name="name"
-              className="input"
-              required
-              maxLength={80}
-              defaultValue={app?.name ?? ''}
-              placeholder="Pixel Painter"
-            />
+            <input id="name" name="name" className="input" required maxLength={80} defaultValue={app?.name ?? ''} placeholder="Pixel Painter" />
           </div>
 
           <div className="field">
@@ -205,25 +235,12 @@ export default function AppForm({ csrf, mode, app, maxApkMb }: Props) {
 
           <div className="field">
             <label htmlFor="releaseChangelog">Release notes</label>
-            <textarea
-              id="releaseChangelog"
-              name="releaseChangelog"
-              className="textarea"
-              rows={3}
-              placeholder="First public release."
-            />
+            <textarea id="releaseChangelog" name="releaseChangelog" className="textarea" rows={3} placeholder="First public release." />
           </div>
 
           <div className="field">
             <label htmlFor="screenshots">Screenshots</label>
-            <input
-              id="screenshots"
-              name="screenshots"
-              type="file"
-              multiple
-              accept="image/png,image/jpeg,image/webp"
-              className="input"
-            />
+            <input id="screenshots" name="screenshots" type="file" multiple accept="image/png,image/jpeg,image/webp" className="input" />
             <span className="field-hint">Up to 8 images. You can add or remove them later.</span>
           </div>
         </div>
@@ -231,11 +248,12 @@ export default function AppForm({ csrf, mode, app, maxApkMb }: Props) {
 
       <div className="form-actions">
         <button className="btn btn-primary" type="submit" disabled={pending}>
-          {pending ? 'Saving…' : mode === 'create' ? 'Create app' : 'Save changes'}
+          {pending ? stage ?? 'Saving…' : mode === 'create' ? 'Create app' : 'Save changes'}
         </button>
         <button type="button" className="btn btn-ghost" onClick={() => router.push('/admin')}>
           Back to dashboard
         </button>
+        {uploadMode === 'blob' && pending ? <span className="field-hint">Uploading directly to storage…</span> : null}
       </div>
     </form>
   );

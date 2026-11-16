@@ -23,7 +23,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
             <span className="brand-mark" aria-hidden="true">
               A
             </span>
-            <span className="brand-text">APKForge</span>
+            <span className="brand-text">MezoneApps</span>
           </Link>
 
           <nav className="admin-nav" aria-label="Admin">

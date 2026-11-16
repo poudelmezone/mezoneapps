@@ -1,8 +1,8 @@
-import { createHash, randomUUID } from 'node:crypto';
-import fs from 'node:fs';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
-import { APK_DIR, MEDIA_DIR, db, now } from './db';
+import { now, one, run } from './db';
 import { ValidationError } from './validation';
+import { putFile } from './storage';
 import type { MediaRow } from './types';
 
 export const MAX_APK_BYTES = Math.max(1, Number(process.env.MAX_APK_MB || 100)) * 1024 * 1024;
@@ -20,7 +20,7 @@ const IMAGE_SIGNATURES: { mime: string; ext: string; test: (b: Buffer) => boolea
 ];
 
 /** Real APKs are ZIP archives; the manifest entry name appears in the archive. */
-function looksLikeApk(buffer: Buffer): boolean {
+export function looksLikeApk(buffer: Buffer): boolean {
   const isZip =
     buffer.length > 4 &&
     buffer[0] === 0x50 &&
@@ -32,10 +32,7 @@ function looksLikeApk(buffer: Buffer): boolean {
 
   // The manifest string is stored uncompressed in the central directory.
   const tail = buffer.subarray(Math.max(0, buffer.length - 256 * 1024));
-  return (
-    buffer.includes(Buffer.from('AndroidManifest.xml', 'ascii')) ||
-    tail.includes(Buffer.from('AndroidManifest.xml', 'ascii'))
-  );
+  return buffer.includes(Buffer.from('AndroidManifest.xml', 'ascii')) || tail.includes(Buffer.from('AndroidManifest.xml', 'ascii'));
 }
 
 export type StoredApk = {
@@ -45,15 +42,21 @@ export type StoredApk = {
   sha256: string;
 };
 
+export function assertApkBuffer(buffer: Buffer, originalName: string): void {
+  if (!/\.apk$/i.test(originalName)) throw new ValidationError('Only .apk files are accepted.');
+  if (buffer.length === 0) throw new ValidationError('The uploaded file is empty.');
+  if (buffer.length > MAX_APK_BYTES) {
+    throw new ValidationError(
+      `APK is too large (${(buffer.length / 1024 / 1024).toFixed(1)} MB). Maximum is ${process.env.MAX_APK_MB || 100} MB.`,
+    );
+  }
+  if (!looksLikeApk(buffer)) {
+    throw new ValidationError('That file is not a valid Android package (no ZIP header / AndroidManifest.xml).');
+  }
+}
+
 export async function storeApk(file: File): Promise<StoredApk> {
   const original = file.name || 'upload.apk';
-
-  if (!/\.apk$/i.test(original)) {
-    throw new ValidationError('Only .apk files are accepted.');
-  }
-  if (file.size <= 0) {
-    throw new ValidationError('The uploaded file is empty.');
-  }
   if (file.size > MAX_APK_BYTES) {
     throw new ValidationError(
       `APK is too large (${(file.size / 1024 / 1024).toFixed(1)} MB). Maximum is ${process.env.MAX_APK_MB || 100} MB.`,
@@ -61,22 +64,39 @@ export async function storeApk(file: File): Promise<StoredApk> {
   }
 
   const buffer = Buffer.from(await file.arrayBuffer());
+  assertApkBuffer(buffer, original);
 
-  if (!looksLikeApk(buffer)) {
-    throw new ValidationError('That file is not a valid Android package (no ZIP header / AndroidManifest.xml).');
-  }
-
-  const storedName = `${randomUUID()}.apk`;
-  const target = path.join(APK_DIR, storedName);
-
-  // 0o600: only the node process can read the APK. It is never web-served directly.
-  fs.writeFileSync(target, buffer, { mode: 0o600 });
+  const stored = await putFile({
+    kind: 'apk',
+    body: buffer,
+    extension: 'apk',
+    contentType: 'application/vnd.android.package-archive',
+    originalName: original,
+  });
 
   return {
     fileName: path.basename(original).replace(/[^\w.\- ]+/g, '_').slice(0, 120),
-    storedName,
+    storedName: stored.stored,
     fileSize: buffer.byteLength,
     sha256: createHash('sha256').update(buffer).digest('hex'),
+  };
+}
+
+/** Registers an upload that already happened directly in object storage. */
+export async function registerApk(input: {
+  storedName: string;
+  fileName: string;
+  fileSize: number;
+  sha256: string;
+}): Promise<StoredApk> {
+  if (!/^https?:\/\//i.test(input.storedName)) {
+    throw new ValidationError('Unrecognised upload reference.');
+  }
+  return {
+    fileName: path.basename(input.fileName || 'upload.apk').replace(/[^\w.\- ]+/g, '_').slice(0, 120),
+    storedName: input.storedName,
+    fileSize: input.fileSize,
+    sha256: input.sha256,
   };
 }
 
@@ -87,44 +107,64 @@ export async function storeImage(file: File): Promise<StoredMedia> {
   if (file.size > MAX_IMAGE_BYTES) throw new ValidationError('Images must be 5 MB or smaller.');
 
   const buffer = Buffer.from(await file.arrayBuffer());
+  return storeImageBuffer(buffer, file.name);
+}
+
+export async function storeImageBuffer(buffer: Buffer, originalName: string): Promise<StoredMedia> {
+  if (buffer.length === 0) throw new ValidationError('The image is empty.');
+  if (buffer.length > MAX_IMAGE_BYTES) throw new ValidationError('Images must be 5 MB or smaller.');
+
   const signature = IMAGE_SIGNATURES.find((entry) => entry.test(buffer));
   if (!signature) throw new ValidationError('Icons and screenshots must be PNG, JPEG or WebP.');
 
-  const id = randomUUID();
-  const storedName = `${id}.${signature.ext}`;
-  fs.writeFileSync(path.join(MEDIA_DIR, storedName), buffer, { mode: 0o644 });
+  const stored = await putFile({
+    kind: 'media',
+    body: buffer,
+    extension: signature.ext,
+    contentType: signature.mime,
+    originalName,
+  });
 
-  db.prepare(
-    'INSERT INTO media (id, stored_name, original_name, mime, size, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-  ).run(id, storedName, path.basename(file.name).slice(0, 120), signature.mime, buffer.byteLength, now());
+  const id = crypto.randomUUID();
+  await run('INSERT INTO media (id, stored_name, original_name, mime, size, created_at) VALUES (?, ?, ?, ?, ?, ?)', [
+    id,
+    stored.stored,
+    path.basename(originalName).slice(0, 120),
+    signature.mime,
+    buffer.byteLength,
+    now(),
+  ]);
 
   return { id, mime: signature.mime };
 }
 
-export function getMedia(id: string): MediaRow | undefined {
-  return db.prepare('SELECT * FROM media WHERE id = ?').get(id) as MediaRow | undefined;
+/** Registers an image that was uploaded straight to object storage by the browser. */
+export async function registerImage(input: { url: string; name: string; size: number }): Promise<StoredMedia> {
+  if (!/^https?:\/\//i.test(input.url)) throw new ValidationError('Unrecognised image reference.');
+
+  const lower = input.url.toLowerCase();
+  const mime = lower.endsWith('.png')
+    ? 'image/png'
+    : lower.endsWith('.webp')
+      ? 'image/webp'
+      : lower.endsWith('.jpg') || lower.endsWith('.jpeg')
+        ? 'image/jpeg'
+        : null;
+  if (!mime) throw new ValidationError('Icons and screenshots must be PNG, JPEG or WebP.');
+
+  const id = crypto.randomUUID();
+  await run('INSERT INTO media (id, stored_name, original_name, mime, size, created_at) VALUES (?, ?, ?, ?, ?, ?)', [
+    id,
+    input.url,
+    path.basename(input.name || 'image').slice(0, 120),
+    mime,
+    input.size,
+    now(),
+  ]);
+
+  return { id, mime };
 }
 
-export function mediaPath(media: MediaRow): string {
-  return path.join(MEDIA_DIR, path.basename(media.stored_name));
-}
-
-export function resolveStoredApk(storedName: string): string {
-  const safe = path.basename(storedName);
-  return path.join(APK_DIR, safe);
-}
-
-export function removeFile(filePath: string): void {
-  try {
-    fs.unlinkSync(filePath);
-  } catch {
-    /* already gone — nothing to do */
-  }
-}
-
-export function deleteMedia(id: string | null | undefined): void {
-  if (!id) return;
-  const media = getMedia(id);
-  if (media) removeFile(mediaPath(media));
-  db.prepare('DELETE FROM media WHERE id = ?').run(id);
+export async function getMedia(id: string): Promise<MediaRow | undefined> {
+  return one<MediaRow>('SELECT * FROM media WHERE id = ?', [id]);
 }

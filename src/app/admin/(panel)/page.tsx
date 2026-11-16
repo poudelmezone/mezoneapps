@@ -10,8 +10,8 @@ export const dynamic = 'force-dynamic';
 
 export default async function AdminDashboard() {
   const session = await requireAdmin();
-  const apps = listAllApps();
-  const stats = platformStats();
+  const apps = await listAllApps();
+  const stats = await platformStats();
   const published = apps.filter((app) => app.published).length;
 
   return (

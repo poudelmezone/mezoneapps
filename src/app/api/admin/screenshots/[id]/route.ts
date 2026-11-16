@@ -14,7 +14,7 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ id: s
     if (!verifyCsrf(req, session)) return fail('Invalid CSRF token.', 403);
 
     const { id } = await params;
-    deleteScreenshot(id);
+    await deleteScreenshot(id);
     return Response.json({ ok: true });
   } catch (error) {
     return handleError(error);

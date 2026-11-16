@@ -3,14 +3,14 @@ import './globals.css';
 
 export const metadata: Metadata = {
   title: {
-    default: 'APKForge — direct APK downloads',
-    template: '%s · APKForge',
+    default: 'MezoneApps — direct APK downloads',
+    template: '%s · MezoneApps',
   },
   description:
     'The official download hub for Android apps: every build, every changelog, delivered straight from the developer.',
   metadataBase: process.env.NEXT_PUBLIC_SITE_URL ? new URL(process.env.NEXT_PUBLIC_SITE_URL) : undefined,
   openGraph: {
-    title: 'APKForge',
+    title: 'MezoneApps',
     description: 'Direct, developer-published APK downloads.',
     type: 'website',
   },
@@ -28,7 +28,7 @@ export const viewport: Viewport = {
  * preference, and sets `data-theme` on <html> so there is no flash of the
  * wrong theme (and no hydration mismatch, because React never owns this).
  */
-const themeBootstrap = `(function(){try{var k='apkforge-theme';var s=localStorage.getItem(k);var d=s==='dark'||(s===null&&window.matchMedia('(prefers-color-scheme: dark)').matches);var t=d?'dark':'light';var r=document.documentElement;r.dataset.theme=t;r.style.colorScheme=t;}catch(e){}})();`;
+const themeBootstrap = `(function(){try{var k='mezoneapps-theme';var s=localStorage.getItem(k);var d=s==='dark'||(s===null&&window.matchMedia('(prefers-color-scheme: dark)').matches);var t=d?'dark':'light';var r=document.documentElement;r.dataset.theme=t;r.style.colorScheme=t;}catch(e){}})();`;
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (

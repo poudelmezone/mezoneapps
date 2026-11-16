@@ -1,4 +1,4 @@
-# APKForge
+# MezoneApps
 
 [![CI](https://github.com/poudelmezone/mezoneapps/actions/workflows/ci.yml/badge.svg)](https://github.com/poudelmezone/mezoneapps/actions/workflows/ci.yml)
 [![Docker image](https://github.com/poudelmezone/mezoneapps/actions/workflows/docker.yml/badge.svg)](https://github.com/poudelmezone/mezoneapps/actions/workflows/docker.yml)
@@ -52,7 +52,7 @@ Built with Next.js 15 (App Router) and React 19. No CMS, no external storage, no
 - **Contrast:** body text is about 15:1 (light) and 14:1 (dark); secondary text stays above 5:1 in both.
 - **Type:** serif display stack (Iowan Old Style, Palatino, Georgia) for headings, humanist sans (Candara, Seravek,
   Segoe UI) for body and UI, mono for versions, sizes and hashes. All system fonts, nothing is fetched.
-- **Toggle:** reads `localStorage['apkforge-theme']`, falls back to `prefers-color-scheme`, and is applied by a blocking
+- **Toggle:** reads `localStorage['mezoneapps-theme']`, falls back to `prefers-color-scheme`, and is applied by a blocking
   script before the first paint, so there is no flash of the wrong theme.
 - **Motion:** 180 ms colour and border transitions only. `prefers-reduced-motion` removes even those.
 
@@ -91,7 +91,9 @@ Copy `.env.example` to `.env`. The app boots without any of these and falls back
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `ADMIN_USERNAME` / `ADMIN_PASSWORD` | none | Read only by `npm run admin:create`; never read by the running server |
+| `ADMIN_USERNAME` / `ADMIN_PASSWORD` | none | Seeds the first account: used by `npm run admin:create`, and read by the server once to bootstrap an empty `users` table (production password is 10+ characters) |
+| `POSTGRES_URL` (or `DATABASE_URL`) | none | Use Postgres instead of SQLite. The schema is created on the first query |
+| `BLOB_READ_WRITE_TOKEN` | none | Use Vercel Blob instead of `DATA_DIR` for APKs and images |
 | `MAX_APK_MB` | `100` | Upload ceiling, enforced server-side |
 | `DATA_DIR` | `./storage` | Root for `apks/`, `media/` and `app.db` |
 | `DATABASE_PATH` | `$DATA_DIR/app.db` | Point the database at another disk |
@@ -175,28 +177,48 @@ src/lib/
 ## Deployment
 
 **GitHub is the source host, not the runtime.** Two things rule out GitHub Pages: the app needs a Node server for its API
-routes and downloads, and it writes to disk (SQLite plus the APK files). Static hosting can do neither.
+routes and downloads, and it stores data. Static hosting can do neither.
 
-What does work:
+On a host with no writable disk, set two environment variables and the app switches backends by itself:
+`POSTGRES_URL` (or `DATABASE_URL`) moves data to Postgres, `BLOB_READ_WRITE_TOKEN` moves APKs and images to Vercel Blob.
+Nothing else changes — the same code still runs locally on SQLite plus `DATA_DIR`.
 
-**1. Container, anywhere with a volume**
+**1. Vercel** (Postgres + Blob, no disk needed)
+
+Import the repo in Vercel, then in the project dashboard:
+
+1. **Storage → Postgres** (Neon). This creates the database and injects `POSTGRES_URL`.
+2. **Storage → Blob**. This creates the bucket and injects `BLOB_READ_WRITE_TOKEN`.
+3. **Settings → Environment Variables**: add `ADMIN_USERNAME`, `ADMIN_PASSWORD` (10+ characters) and, optionally,
+   `MAX_APK_MB`. Apply them to Production and Preview.
+4. **Deployments → Redeploy** so the running build picks the variables up.
+
+Open `/admin/login`. On the first auth request the app creates the admin account from `ADMIN_USERNAME` / `ADMIN_PASSWORD`,
+but only while the `users` table is empty — after that the environment values are inert and the login page is the only way
+in. Rotate the password from the panel, not the environment.
+
+How uploads work there: Vercel caps request bodies at 4.5 MB, so admin forms ask `/api/admin/blob-upload` for a signed
+token and send the APK **straight from the browser to Blob**. The form then posts only the metadata. Downloads are counted
+first and answered with a `302` to the Blob URL.
+
+**2. Container, anywhere with a volume**
 
 ```bash
-docker build -t apkforge .
-docker run -d --name apkforge -p 3000:3000 \
-  -v apkforge-data:/data \
+docker build -t mezoneapps .
+docker run -d --name mezoneapps -p 3000:3000 \
+  -v mezoneapps-data:/data \
   -e ADMIN_USERNAME=admin -e ADMIN_PASSWORD='a-long-passphrase' \
-  apkforge
-docker exec apkforge node scripts/create-admin.mjs   # create the account inside the volume
+  mezoneapps
+docker exec mezoneapps node scripts/create-admin.mjs   # create the account inside the volume
 ```
 
 The image is also published to GitHub Container Registry on every push to `main`:
 
 ```bash
-docker run -d -p 3000:3000 -v apkforge-data:/data ghcr.io/poudelmezone/mezoneapps:main
+docker run -d -p 3000:3000 -v mezoneapps-data:/data ghcr.io/poudelmezone/mezoneapps:main
 ```
 
-**2. Fly.io** (real volumes, so SQLite is safe)
+**3. Fly.io** (real volumes, so SQLite is safe)
 
 ```bash
 fly launch --no-deploy
@@ -207,7 +229,7 @@ fly deploy
 fly ssh console -C "node scripts/create-admin.mjs"
 ```
 
-**3. VPS or home server**
+**4. VPS or home server**
 
 ```bash
 npm ci && npm run build
@@ -217,13 +239,12 @@ NODE_ENV=production npm start   # behind nginx or Caddy with TLS
 nginx needs `client_max_body_size` above `MAX_APK_MB`, and `storage/` must be on a real disk. Run it under systemd or pm2
 so it restarts on reboot.
 
-**Avoid** platforms with an ephemeral filesystem (Vercel, Netlify, plain Render web services) unless you first move the
-database to Postgres and uploads to S3 or R2. In this codebase that means rewriting `src/lib/db.ts`, `src/lib/apps.ts`,
-`storeApk`/`storeImage` and the two streaming routes; nothing else assumes local disk.
+A host with an ephemeral filesystem and no Postgres or Blob store is the only real dead end: without `DATA_DIR` there is
+nowhere to put SQLite or the APK files.
 
 ### Backups
 
-The database and the APKs are both under `DATA_DIR`. Back them up together:
+When you self-host, the database and the APKs are both under `DATA_DIR`. Back them up together:
 
 ```bash
 sqlite3 storage/app.db ".backup '/backups/app-$(date +%F).db'"
@@ -237,10 +258,11 @@ Dockerfile already does).
 
 ---
 
-## Known advisory
+## Dependency notes
 
-`npm audit` reports postcss advisories that ship inside Next 15's dependency tree. `package.json` pins postcss to a
-patched 8.x through `overrides`; clearing the rest requires a Next 16 major upgrade, which is deliberately deferred.
+`npm audit` reports zero vulnerabilities. Two `overrides` keep it that way: `postcss` is pinned to the patched 8.x that
+Next 15 pulls in, and `zod` (transitive through `@vercel/blob`) to 4.6.6+, which fixes a memory-exhaustion advisory.
+Both can be dropped once the upstream packages raise their own floors.
 
 ## License
 

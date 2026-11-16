@@ -2,9 +2,9 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
-import { db, now } from './db';
+import { now, one, run } from './db';
 
-export const SESSION_COOKIE = 'apkforge_sid';
+export const SESSION_COOKIE = 'mezoneapps_sid';
 export const CSRF_HEADER = 'x-csrf-token';
 const SESSION_TTL_MS = 1000 * 60 * 60 * 12; // 12 hours
 const BCRYPT_ROUNDS = 12;
@@ -29,21 +29,47 @@ export function verifyPassword(password: string, hash: string): boolean {
   }
 }
 
-export function findUserByUsername(username: string) {
-  return db.prepare('SELECT id, username, password_hash FROM users WHERE username = ?').get(username) as
-    | { id: string; username: string; password_hash: string }
-    | undefined;
+export async function findUserByUsername(username: string) {
+  return one<{ id: string; username: string; password_hash: string }>(
+    'SELECT id, username, password_hash FROM users WHERE username = ?',
+    [username],
+  );
 }
 
-export function createUser(username: string, password: string): string {
+export async function createUser(username: string, password: string): Promise<string> {
   const id = randomBytes(16).toString('hex');
-  db.prepare('INSERT INTO users (id, username, password_hash, created_at) VALUES (?, ?, ?, ?)').run(
+  await run('INSERT INTO users (id, username, password_hash, created_at) VALUES (?, ?, ?, ?)', [
     id,
     username,
     hashPassword(password),
     now(),
-  );
+  ]);
   return id;
+}
+
+/**
+ * Serverless bootstrap: on Vercel there is no shell to run
+ * `npm run admin:create`, so the first account is created from the environment
+ * the first time the app touches auth — and only while no user exists.
+ */
+let bootstrap: Promise<void> | null = null;
+
+export function ensureBootstrapAdmin(): Promise<void> {
+  if (!bootstrap) {
+    bootstrap = (async () => {
+      const username = (process.env.ADMIN_USERNAME || '').trim().toLowerCase();
+      const password = process.env.ADMIN_PASSWORD || '';
+      if (!username || password.length < 10) return;
+
+      const count = await one<{ n: number }>('SELECT COUNT(*) AS n FROM users');
+      if (Number(count?.n ?? 0) > 0) return;
+
+      await createUser(username, password);
+    })().catch((error) => {
+      console.error('[auth] bootstrap failed', error);
+    });
+  }
+  return bootstrap;
 }
 
 export async function getSession(): Promise<AdminSession | null> {
@@ -51,21 +77,24 @@ export async function getSession(): Promise<AdminSession | null> {
   const token = store.get(SESSION_COOKIE)?.value;
   if (!token) return null;
 
-  const row = db
-    .prepare(
-      `SELECT s.id, s.csrf_token, s.expires_at, u.id AS user_id, u.username
-         FROM sessions s
-         JOIN users u ON u.id = s.user_id
-        WHERE s.id = ?`,
-    )
-    .get(token) as
-    | { id: string; csrf_token: string; expires_at: number; user_id: string; username: string }
-    | undefined;
+  const row = await one<{
+    id: string;
+    csrf_token: string;
+    expires_at: number;
+    user_id: string;
+    username: string;
+  }>(
+    `SELECT s.id, s.csrf_token, s.expires_at, u.id AS user_id, u.username
+       FROM sessions s
+       JOIN users u ON u.id = s.user_id
+      WHERE s.id = ?`,
+    [token],
+  );
 
   if (!row) return null;
 
-  if (row.expires_at <= now()) {
-    db.prepare('DELETE FROM sessions WHERE id = ?').run(row.id);
+  if (Number(row.expires_at) <= now()) {
+    await run('DELETE FROM sessions WHERE id = ?', [row.id]);
     return null;
   }
 
@@ -74,7 +103,7 @@ export async function getSession(): Promise<AdminSession | null> {
     userId: row.user_id,
     username: row.username,
     csrfToken: row.csrf_token,
-    expiresAt: row.expires_at,
+    expiresAt: Number(row.expires_at),
   };
 }
 
@@ -87,11 +116,12 @@ export async function createSession(userId: string, userAgent: string | null): P
   const csrfToken = randomBytes(32).toString('base64url');
   const expiresAt = now() + SESSION_TTL_MS;
 
-  db.prepare(
+  await run(
     'INSERT INTO sessions (id, user_id, csrf_token, expires_at, created_at, user_agent) VALUES (?, ?, ?, ?, ?, ?)',
-  ).run(token, userId, csrfToken, expiresAt, now(), userAgent ? userAgent.slice(0, 300) : null);
+    [token, userId, csrfToken, expiresAt, now(), userAgent ? userAgent.slice(0, 300) : null],
+  );
 
-  db.prepare('DELETE FROM sessions WHERE expires_at <= ?').run(now());
+  await run('DELETE FROM sessions WHERE expires_at <= ?', [now()]);
 
   const store = await cookies();
   store.set(SESSION_COOKIE, token, {
@@ -102,20 +132,21 @@ export async function createSession(userId: string, userAgent: string | null): P
     maxAge: Math.floor(SESSION_TTL_MS / 1000),
   });
 
-  const user = db.prepare('SELECT username FROM users WHERE id = ?').get(userId) as { username: string };
+  const user = await one<{ username: string }>('SELECT username FROM users WHERE id = ?', [userId]);
 
-  return { id: token, userId, username: user.username, csrfToken, expiresAt };
+  return { id: token, userId, username: user?.username ?? 'admin', csrfToken, expiresAt };
 }
 
 export async function destroySession(): Promise<void> {
   const store = await cookies();
   const token = store.get(SESSION_COOKIE)?.value;
-  if (token) db.prepare('DELETE FROM sessions WHERE id = ?').run(token);
+  if (token) await run('DELETE FROM sessions WHERE id = ?', [token]);
   store.set(SESSION_COOKIE, '', { httpOnly: true, path: '/', maxAge: 0, sameSite: 'lax' });
 }
 
 /** Server-component guard used by the admin layout. */
 export async function requireAdmin(): Promise<AdminSession> {
+  await ensureBootstrapAdmin();
   const session = await getSession();
   if (!session) redirect('/admin/login');
   return session;

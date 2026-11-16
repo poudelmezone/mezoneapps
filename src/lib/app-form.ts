@@ -19,7 +19,7 @@ export async function parseAppForm(
   const slugRaw = optionalString(form.get('slug'), 'Slug', { max: 80 }) || slugify(name);
   const slug = validateSlug(slugRaw);
 
-  if (slugTaken(slug, options.appId)) {
+  if (await slugTaken(slug, options.appId)) {
     throw new ValidationError(`The slug "${slug}" is already used by another app.`);
   }
 

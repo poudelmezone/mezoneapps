@@ -4,6 +4,7 @@ import AppForm from '@/components/admin/AppForm';
 import AssetManager from '@/components/admin/AssetManager';
 import { requireAdmin } from '@/lib/auth';
 import { getAppById } from '@/lib/apps';
+import { usingBlob } from '@/lib/storage';
 import { MAX_APK_BYTES } from '@/lib/uploads';
 
 export const dynamic = 'force-dynamic';
@@ -13,7 +14,7 @@ type Props = { params: Promise<{ id: string }> };
 export default async function EditAppPage({ params }: Props) {
   const session = await requireAdmin();
   const { id } = await params;
-  const app = getAppById(id);
+  const app = await getAppById(id);
 
   if (!app) notFound();
 
@@ -39,7 +40,13 @@ export default async function EditAppPage({ params }: Props) {
         </div>
       </div>
 
-      <AppForm csrf={session.csrfToken} mode="edit" app={app} maxApkMb={Math.round(MAX_APK_BYTES / 1024 / 1024)} />
+      <AppForm
+        csrf={session.csrfToken}
+        mode="edit"
+        app={app}
+        maxApkMb={Math.round(MAX_APK_BYTES / 1024 / 1024)}
+        uploadMode={usingBlob ? 'blob' : 'server'}
+      />
 
       <AssetManager
         appId={app.id}
@@ -47,6 +54,7 @@ export default async function EditAppPage({ params }: Props) {
         releases={app.releases}
         screenshots={app.screenshots}
         maxApkMb={Math.round(MAX_APK_BYTES / 1024 / 1024)}
+        uploadMode={usingBlob ? 'blob' : 'server'}
       />
     </>
   );

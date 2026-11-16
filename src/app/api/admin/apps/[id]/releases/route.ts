@@ -1,8 +1,9 @@
 import { getSession, verifyCsrf, verifyOrigin } from '@/lib/auth';
 import { addRelease, getAppById } from '@/lib/apps';
 import { fail, handleError } from '@/lib/http';
-import { storeApk } from '@/lib/uploads';
-import { optionalString, requiredString } from '@/lib/validation';
+import { assertUploadRef, readRequest } from '@/lib/payload';
+import { MAX_APK_BYTES, registerApk, storeApk } from '@/lib/uploads';
+import { optionalString, requiredString, ValidationError } from '@/lib/validation';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -16,19 +17,32 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     if (!verifyCsrf(req, session)) return fail('Invalid CSRF token.', 403);
 
     const { id } = await params;
-    if (!getAppById(id)) return fail('App not found.', 404);
+    if (!(await getAppById(id))) return fail('App not found.', 404);
 
-    const form = await req.formData();
-    const apk = form.get('apk');
-    if (!apk || typeof apk !== 'object' || !('arrayBuffer' in apk) || (apk as File).size === 0) {
-      return fail('Choose an .apk file to upload.', 400);
-    }
-
+    const { form, apk } = await readRequest(req);
     const version = requiredString(form.get('version'), 'Version', { max: 40 });
     const changelog = optionalString(form.get('changelog'), 'Changelog', { max: 10000 });
 
-    const stored = await storeApk(apk as File);
-    const releaseId = addRelease({
+    let stored;
+
+    if (apk) {
+      assertUploadRef(apk, 'apk');
+      if (apk.size > MAX_APK_BYTES) throw new ValidationError('APK is too large.');
+      stored = await registerApk({
+        storedName: apk.url,
+        fileName: apk.name || 'upload.apk',
+        fileSize: apk.size,
+        sha256: apk.sha256 ?? '',
+      });
+    } else {
+      const file = form.get('apk');
+      if (!file || typeof file !== 'object' || !('arrayBuffer' in file) || (file as File).size === 0) {
+        return fail('Choose an .apk file to upload.', 400);
+      }
+      stored = await storeApk(file as File);
+    }
+
+    const releaseId = await addRelease({
       appId: id,
       version,
       changelog,
