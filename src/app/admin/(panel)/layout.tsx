@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
+import BrandMark from '@/components/BrandMark';
 import SignOutButton from '@/components/admin/SignOutButton';
 import ThemeToggle from '@/components/ThemeToggle';
 import { requireAdmin } from '@/lib/auth';
@@ -20,9 +21,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
       <header className="admin-topbar">
         <div className="container admin-topbar-inner">
           <Link href="/admin" className="brand">
-            <span className="brand-mark" aria-hidden="true">
-              A
-            </span>
+            <BrandMark />
             <span className="brand-text">MezoneApps</span>
           </Link>
 

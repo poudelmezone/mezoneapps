@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import BrandMark from './BrandMark';
 import ThemeToggle from './ThemeToggle';
 
 export default function SiteHeader() {
@@ -6,9 +7,7 @@ export default function SiteHeader() {
     <header className="site-header">
       <div className="container header-inner">
         <Link href="/" className="brand" aria-label="MezoneApps home">
-          <span className="brand-mark" aria-hidden="true">
-            A
-          </span>
+          <BrandMark />
           <span className="brand-text">MezoneApps</span>
         </Link>
 

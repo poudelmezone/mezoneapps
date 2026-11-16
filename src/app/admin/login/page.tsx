@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
+import BrandMark from '@/components/BrandMark';
 import { getSession } from '@/lib/auth';
 import LoginForm from './LoginForm';
 
@@ -15,9 +16,7 @@ export default async function LoginPage() {
     <main id="main" className="login-page">
       <div className="login-card">
         <Link href="/" className="brand">
-          <span className="brand-mark" aria-hidden="true">
-            A
-          </span>
+          <BrandMark />
           <span className="brand-text">MezoneApps</span>
         </Link>
 

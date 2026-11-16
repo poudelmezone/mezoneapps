@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import BrandMark from './BrandMark';
 
 export default function SiteFooter() {
   return (
@@ -7,9 +8,7 @@ export default function SiteFooter() {
         <div className="footer-inner">
           <div className="footer-brand">
             <Link href="/" className="brand">
-              <span className="brand-mark" aria-hidden="true">
-                A
-              </span>
+              <BrandMark />
               <span className="brand-text">MezoneApps</span>
             </Link>
             <p>Signed builds, published by the developer. No trackers, no redirects, no third-party mirrors.</p>
